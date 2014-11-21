@@ -1,4 +1,9 @@
+from pyutil.string import StringUtil
+
 class Node(object):
+    class SMarkError(Exception):
+        pass
+
     def __init__(self, name, ip):
         self.name = name
         self.ip = ip
@@ -34,9 +39,9 @@ class Node(object):
 
     def get_node(self, fullname):
         """Get node by full name."""
+        fullname = Node.normalize_name(fullname)
+        # find the node
         names = fullname.split('/')
-        if names[0] != '':
-            raise ValueError("Name must starts with /: %s" % fullname)
         curr = self
         for name in names[1:]:
             child = curr.get_child(name)
@@ -47,7 +52,7 @@ class Node(object):
 
     def level(self):
         """Current level of this node. The topmost level is 0."""
-        count = 0
+        count = -1
         curr = self
         while curr is not None:
             curr = curr.parent
@@ -55,18 +60,71 @@ class Node(object):
         return count
 
     def __str__(self):
-        return '%s:%s' % (self.fullname(), self.ip)
+        return '(%s, %s)' % (self.fullname(), self.ip)
+
+    @classmethod
+    def normalize_name(self, string):
+        if not string.startswith('/'):
+            raise ValueError("Name must starts with /: %s" % string)
+        string = string.rstrip('/')
+        result = []
+        for i, ch in enumerate(string):
+            if i == 0:
+                result.append(ch)
+            elif (ch == '/') and (result[-1] == '/'):
+                continue
+            else:
+                result.append(ch)
+        return ''.join(result)
+
+    @classmethod
+    def serialize(cls, node, writer, smark='(', emark=')', sep=','):
+        if node is None:
+            raise ValueError('Node is None.')
+        cls.ensure_valid_ser(node, smark + emark + sep)
+        writer.write('%s%s%s%s%s'
+                     % (smark, node.name, sep, node.ip, emark))
+
+    @classmethod
+    def deserialize(self, reader, smark='(', emark=')', sep=','):
+        ch = reader.read()
+        if ch != smark:
+            raise Node.SMarkError(ch)
+        chars = []
+        while ch != emark:
+            ch = reader.read()
+            if ch == '':
+                raise EOFError('Unexpected EOF.')
+            if ch != emark:
+                chars.append(ch)
+        name, ip = ''.join(chars).split(sep)
+        ip = None if ip == 'None' else ip
+        return Node(name, ip)
+
+    @classmethod
+    def ensure_valid_ser(cls, node, chars):
+        if StringUtil.has_chars(node.name, chars):
+            raise ValueError('Conflict node name and special chars: %s, %s'
+                             % (node.name, chars))
+        if (node.ip is not None) and StringUtil.has_chars(node.ip, chars):
+            raise ValueError('Conflict node name and special chars: %s, %s'
+                             % (node.ip, chars))
 
 
 class Topology(object):
+    class SMarkError(Exception):
+        pass
+
+    class EMarkError(Exception):
+        pass
+
     def __init__(self):
         self.root = Node('', None)
 
     def add_node(self, fullname, ip):
         """Add a node."""
+        fullname = Node.normalize_name(fullname)
         names = fullname.split('/')
-        if names[0] != "":
-            raise ValueError("Name must starts with /: %s" % fullname)
         curr = self.root
         for i in range(1, len(names)):
             name = names[i]
@@ -103,7 +161,7 @@ class Topology(object):
     def get_racks(self, scope=None):
         """Get all racks under scope."""
         racks = set([])
-        for leaf in self.getleaves(scope):
+        for leaf in self.get_leaves(scope):
             racks.add(leaf.parent)
         return sorted(racks, key=str)
 
@@ -120,7 +178,7 @@ class Topology(object):
             if node.name == name:
                 return node
             for child in node.children:
-                queue.append(node)
+                queue.append(child)
         return None
 
     def find_by_ip(self, ip):
@@ -132,7 +190,7 @@ class Topology(object):
             if node.ip == ip:
                 return node
             for child in node.children:
-                queue.append(node)
+                queue.append(child)
         return None
 
     def get_nhops(self, node1, node2):
@@ -152,23 +210,31 @@ class Topology(object):
             dis += 2
         return dis
 
-    def get_string(self, scope=None, endmark='#'):
+    @classmethod
+    def serialize(cls, topology, writer, scope=None,
+                  smark='{', emark='}', sep='$'):
+        if topology is None:
+            raise ValueError('Topology is None.')
         if scope is None:
-            node = self.root
+            node = topology.root
         else:
-            node = self.get_node(scope)
-        result = []
+            node = topology.get_node(scope)
         pstack = []
         curr = node
         cvisited = False
+        writer.write(smark)
         while (len(pstack) > 0) or (not cvisited):
             if not cvisited:
                 if len(curr.children) > 0:
-                    pstack.append((curr, 0))
-                    result.append('(%s,%s)' % (curr.name, curr.ip))
+                    pstack.append([curr, 0])
+                    Node.ensure_valid_ser(node, smark + emark + sep)
+                    Node.serialize(curr, writer)
+                    curr = curr.children[0]
                 else:
                     cvisited = True
-                    result.append('(%s,%s)%s' % (curr.name, curr.ip, endmark))
+                    Node.ensure_valid_ser(node, smark + emark + sep)
+                    Node.serialize(curr, writer)
+                    writer.write(sep)
             else:
                 parent, idx = pstack[-1]
                 if idx != len(parent.children) - 1:
@@ -179,5 +245,42 @@ class Topology(object):
                 else:
                     pstack.pop()
                     curr = parent
-                    result.append(endmark)
-        return ''.join(result)
+                    writer.write(sep)
+        writer.write(emark)
+
+    @classmethod
+    def deserialize(cls, reader, smark='{', emark='}', sep='$',
+                    nsmark='(', nemark=')', nsep=','):
+        ch = reader.read()
+        if ch != smark:
+            raise Topology.SMarkError(ch)
+        topology = Topology()
+        root = Node.deserialize(reader, nsmark, nemark, nsep)
+        if root.name is not '' and root.ip is not None:
+            raise ValueError('Incorrect root serialization.')
+        curr = topology.root
+        stack = [curr]
+        while True:
+            try:
+                child = Node.deserialize(reader, nsmark, nemark, nsep)
+                if curr is None:
+                    root = child
+                else:
+                    curr.add_child(child)
+                    stack.append(child)
+                curr = child
+            except Node.SMarkError as e:
+                ch = e.args[0]
+                if ch == sep:
+                    if len(stack) == 0:
+                        raise SyntaxError('Unmatching separators and nodes.')
+                    stack.pop()
+                    if len(stack) == 0:
+                        break
+                    curr = stack[-1]
+                else:
+                    raise Node.SMarkError(ch)
+        ch = reader.read()
+        if ch != emark:
+            raise Topology.EMarkError(ch)
+        return topology
