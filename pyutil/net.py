@@ -22,29 +22,29 @@ class Node(object):
             result = '/' + result
         return result
 
-    def add_child(self, node):
+    def addchild(self, node):
         self.children.append(node)
         node.parent = self
 
-    def add_children(self, nodes):
+    def addchildren(self, nodes):
         for node in nodes:
-            self.add_child(node)
+            self.addchild(node)
 
-    def get_child(self, name):
+    def getchild(self, name):
         """Get the child by name."""
         for child in self.children:
             if child.name == name:
                 return child
         return None
 
-    def get_node(self, fullname):
+    def getnode(self, fullname):
         """Get node by full name."""
-        fullname = Node.normalize_name(fullname)
+        fullname = StringUtil.normalize_path(fullname)
         # find the node
         names = fullname.split('/')
         curr = self
         for name in names[1:]:
-            child = curr.get_child(name)
+            child = curr.getchild(name)
             if child is None:
                 return None
             curr = child
@@ -63,21 +63,6 @@ class Node(object):
         return '(%s, %s)' % (self.fullname(), self.ip)
 
     @classmethod
-    def normalize_name(self, string):
-        if not string.startswith('/'):
-            raise ValueError("Name must starts with /: %s" % string)
-        string = string.rstrip('/')
-        result = []
-        for i, ch in enumerate(string):
-            if i == 0:
-                result.append(ch)
-            elif (ch == '/') and (result[-1] == '/'):
-                continue
-            else:
-                result.append(ch)
-        return ''.join(result)
-
-    @classmethod
     def serialize(cls, node, writer, smark='(', emark=')', sep=','):
         if node is None:
             raise ValueError('Node is None.')
@@ -87,12 +72,12 @@ class Node(object):
 
     @classmethod
     def deserialize(self, reader, smark='(', emark=')', sep=','):
-        ch = reader.read()
+        ch = reader.read(1)
         if ch != smark:
             raise Node.SMarkError(ch)
         chars = []
         while ch != emark:
-            ch = reader.read()
+            ch = reader.read(1)
             if ch == '':
                 raise EOFError('Unexpected EOF.')
             if ch != emark:
@@ -121,32 +106,32 @@ class Topology(object):
     def __init__(self):
         self.root = Node('', None)
 
-    def add_node(self, fullname, ip):
+    def addnode(self, fullname, ip):
         """Add a node."""
-        fullname = Node.normalize_name(fullname)
+        fullname = StringUtil.normalize_path(fullname)
         names = fullname.split('/')
         curr = self.root
         for i in range(1, len(names)):
             name = names[i]
-            node = curr.get_child(name)
+            node = curr.getchild(name)
             nodeip = None if i != len(names) - 1 else ip
             if node is None:
                 node = Node(name, nodeip)
-                curr.add_child(node)
+                curr.addchild(node)
             curr = node
         return curr
 
-    def add_nodes(self, nameips):
+    def addnodes(self, nameips):
         """Add a list of nodes"""
         for name, ip in nameips:
-            self.add_node(name, ip)
+            self.addnode(name, ip)
 
-    def get_leaves(self, scope=None):
+    def getleaves(self, scope=None):
         """Get all leaf node under scope."""
         if scope is None:
             node = self.root
         else:
-            node = self.root.get_node(scope)
+            node = self.root.getnode(scope)
         leaves = []
         queue = [node]
         while len(queue) != 0:
@@ -158,16 +143,16 @@ class Topology(object):
                     queue.append(child)
         return sorted(leaves, key=str)
 
-    def get_racks(self, scope=None):
+    def getracks(self, scope=None):
         """Get all racks under scope."""
         racks = set([])
-        for leaf in self.get_leaves(scope):
+        for leaf in self.getleaves(scope):
             racks.add(leaf.parent)
         return sorted(racks, key=str)
 
-    def get_node(self, fullname):
+    def getnode(self, fullname):
         """Get the node by full name."""
-        return self.root.get_node(fullname)
+        return self.root.getnode(fullname)
 
     def find_by_name(self, name):
         """Search the node by its name."""
@@ -193,7 +178,7 @@ class Topology(object):
                 queue.append(child)
         return None
 
-    def get_nhops(self, node1, node2):
+    def getnhops(self, node1, node2):
         if node1 is node2:
             return 0
         dis = 0
@@ -218,7 +203,7 @@ class Topology(object):
         if scope is None:
             node = topology.root
         else:
-            node = topology.get_node(scope)
+            node = topology.getnode(scope)
         pstack = []
         curr = node
         cvisited = False
@@ -251,7 +236,7 @@ class Topology(object):
     @classmethod
     def deserialize(cls, reader, smark='{', emark='}', sep='$',
                     nsmark='(', nemark=')', nsep=','):
-        ch = reader.read()
+        ch = reader.read(1)
         if ch != smark:
             raise Topology.SMarkError(ch)
         topology = Topology()
@@ -266,7 +251,7 @@ class Topology(object):
                 if curr is None:
                     root = child
                 else:
-                    curr.add_child(child)
+                    curr.addchild(child)
                     stack.append(child)
                 curr = child
             except Node.SMarkError as e:
@@ -280,7 +265,7 @@ class Topology(object):
                     curr = stack[-1]
                 else:
                     raise Node.SMarkError(ch)
-        ch = reader.read()
+        ch = reader.read(1)
         if ch != emark:
             raise Topology.EMarkError(ch)
         return topology
