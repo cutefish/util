@@ -6,6 +6,7 @@ import time
 import traceback
 from threading import Lock, Thread
 
+from pyutil.fio import StdPipeWriter
 from pyutil.string import NLinesStdStringWriter
 
 class Alarm(Thread):
@@ -14,7 +15,7 @@ class Alarm(Thread):
     init arguments:
         function: work to do at each alarm time.
         interval: the interval between two alarms.
-        start: start time of the alarm.
+        at: at time of the alarm.
 
     methods:
         start(): start the alarm.
@@ -94,6 +95,7 @@ class Pool(object):
             self.torun[1].append((cmd, out_writer, timeout))
 
     def wait(self):
+        start = time.time()
         while True:
             blocking = False
             with self.torun[0]:
@@ -103,7 +105,7 @@ class Pool(object):
                     if thread.isworking():
                         blocking = True
             if blocking:
-                time.sleep(1)
+                time.sleep(0.1)
             else:
                 break
 
@@ -123,6 +125,14 @@ class Pool(object):
         for thread in self.threads:
             thread.close()
 
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.close()
+
+
 class PoolWorker(Thread):
     def __init__(self, torun, finished, failed):
         super(PoolWorker, self).__init__()
@@ -130,7 +140,7 @@ class PoolWorker(Thread):
         self.finished = finished
         self.failed = failed
         self.curr = None
-        self.start = None
+        self.begin = None
         self.timeout = None
         self.check_interval = 0.1
         self.closed = False
@@ -154,7 +164,10 @@ class PoolWorker(Thread):
         proc, cmd, writer = self.curr
         # check timeout
         if self.timeout is not None:
-            if time.time() - self.start > self.timeout:
+            curr = time.time() - self.begin
+            if curr > self.timeout:
+                self.logger.warn(
+                    'Command [%s] time out (%s sec). Kill.' % (cmd, curr))
                 proc.kill()
                 proc.wait()
         # check execution
@@ -166,8 +179,8 @@ class PoolWorker(Thread):
                 'Command [%s] exit with code %s.\n'
                 '\tSTDOUT:\n%s\n\tSTDERR:\n%s\n'
                 % (cmd, retcode,
-                   ''.join(writer.stdout().tail(10)),
-                   ''.join(writer.stderr().tail(10))))
+                   ''.join(writer.stdout().tail(50)),
+                   ''.join(writer.stderr().tail(50))))
             with self.failed[0]:
                 self.failed[1].append((cmd, retcode, writer))
         else:
@@ -176,11 +189,11 @@ class PoolWorker(Thread):
             with self.finished[0]:
                 self.finished[1].append((cmd, retcode, writer))
         self.curr = None
-        self.start = None
+        self.begin = None
         self.timeout = None
         try:
             writer.close()
-        except Exception as e:
+        except Exception:
             self.logger.warn('Writer close exception.\n%s'
                              % (traceback.format_exc()))
 
@@ -191,13 +204,25 @@ class PoolWorker(Thread):
             if len(self.torun[1]) == 0:
                 return
             cmd, writer, timeout = self.torun[1].pop(0)
-        if writer is None:
-            writer = NLinesStdStringWriter()
-        proc = subprocess.Popen(
-            shlex.split(cmd), stdout=writer.stdout(), stderr=writer.stderr())
-        self.curr = proc, cmd, writer
-        self.start = time.time()
-        self.timeout = timeout
+            try:
+                if writer is None:
+                    proc = subprocess.Popen(shlex.split(cmd),
+                                            stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE)
+                    writer = StdPipeWriter(
+                        proc, NLinesStdStringWriter(100, 50))
+                else:
+                    proc = subprocess.Popen(shlex.split(cmd),
+                                            stdout=writer.stdout(),
+                                            stderr=writer.stderr())
+                self.logger.info(
+                    'Command [%s > %s] start.' % (cmd, writer.name))
+                self.curr = proc, cmd, writer
+                self.begin = time.time()
+                self.timeout = timeout
+            except Exception:
+                self.logger.warn('Start command exception.\n%s'
+                                 % (traceback.format_exc()))
 
     def isworking(self):
         return self.curr is not None
@@ -212,7 +237,7 @@ class PoolWorker(Thread):
             except:
                 pass
         self.curr = None
-        self.start = None
+        self.begin = None
         self.timeout = None
 
     def close(self):

@@ -1,6 +1,7 @@
 import io
 import os
 import shutil
+from threading import Thread
 
 
 class FileUtil(object):
@@ -86,9 +87,47 @@ class StdFileWriter(object):
         FileUtil.rmf(errfile)
         self.out_writer = FileWriter(outfile)
         self.err_writer = FileWriter(errfile)
+        self.name = dirname
 
     def stdout(self):
         return self.out_writer
 
     def stderr(self):
         return self.err_writer
+
+    def close(self):
+        self.out_writer.close()
+        self.err_writer.close()
+
+
+class StdPipeWriter(object):
+    def __init__(self, proc, std_writer):
+        self.proc = proc
+        self.std_writer = std_writer
+        self.name = self.__class__.__name__
+        outthread = PipeThread(proc.stdout, std_writer.stdout())
+        errthread = PipeThread(proc.stderr, std_writer.stderr())
+        outthread.start()
+        errthread.start()
+
+    def stdout(self):
+        return self.std_writer.stdout()
+
+    def stderr(self):
+        return self.std_writer.stderr()
+
+    def close(self):
+        self.std_writer.close()
+        self.proc.stdout.close()
+        self.proc.stderr.close()
+
+
+class PipeThread(Thread):
+    def __init__(self, pipe, writer):
+        super(PipeThread, self).__init__()
+        self.pipe = pipe
+        self.writer = writer
+
+    def run(self):
+        for line in iter(self.pipe.readline, ''):
+            self.writer.write(line)

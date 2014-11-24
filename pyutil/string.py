@@ -1,3 +1,5 @@
+from threading import Lock
+
 class StringUtil(object):
     @classmethod
     def has_chars(cls, string, chars):
@@ -42,6 +44,8 @@ class NLinesStringWriter(object):
         self.closed = False
         self.softspace = 0
         self.maxlinesize = maxlinesize
+        self.lock = Lock()
+        self.name = self.__class__.__name__
 
     def __iter__(self):
         self._complain_notimplemented('__iter__')
@@ -50,10 +54,11 @@ class NLinesStringWriter(object):
         self._complain_notimplemented('next')
 
     def close(self):
-        self.linebuf.append(''.join(self.buf))
-        self.buf = []
-        if not self.closed:
-            self.closed = True
+        with self.lock:
+            self.linebuf.append(''.join(self.buf))
+            self.buf = []
+            if not self.closed:
+                self.closed = True
 
     def isatty(self):
         self._complain_ifclosed()
@@ -84,29 +89,30 @@ class NLinesStringWriter(object):
 
     def write(self, s):
         """Write a string to the file. """
-        self._complain_ifclosed()
-        if not s: return
-        if not isinstance(s, basestring):
-            s = str(s)
-        left = 0
-        right = 0
-        while right < len(s):
-            if right - left + 1 >= self.maxlinesize:
-                raise RuntimeError('Line too long.')
-            if s[right] == '\n':
-                if len(self.buf) != 0:
-                    self.buf.append(s[left : right + 1])
-                    newline = ''.join(self.buf)
-                    self.buf = []
-                else:
-                    newline = s[left : right + 1]
-                self.linebuf.append(newline)
-                left = right + 1
-            right += 1
-        if left < len(s):
-            self.buf.append(s[left:])
-        self.pos += len(s)
-        self.ensure_size()
+        with self.lock:
+            self._complain_ifclosed()
+            if not s: return
+            if not isinstance(s, basestring):
+                s = str(s)
+            left = 0
+            right = 0
+            while right < len(s):
+                if right - left + 1 >= self.maxlinesize:
+                    raise RuntimeError('Line too long.')
+                if s[right] == '\n':
+                    if len(self.buf) != 0:
+                        self.buf.append(s[left : right + 1])
+                        newline = ''.join(self.buf)
+                        self.buf = []
+                    else:
+                        newline = s[left : right + 1]
+                    self.linebuf.append(newline)
+                    left = right + 1
+                right += 1
+            if left < len(s):
+                self.buf.append(s[left:])
+            self.pos += len(s)
+            self.ensure_size()
 
     def ensure_size(self):
         if self.lineno() > self.nlines:
@@ -137,18 +143,20 @@ class NLinesStringWriter(object):
 
     def getvalue(self):
         """Retrieve the entire contents of the "file". """
-        return ''.join(self.linebuf[self.lbstart:]) + ''.join(self.buf)
+        with self.lock:
+            return ''.join(self.linebuf[self.lbstart:]) + ''.join(self.buf)
 
     def lines(self):
         result = self.linebuf[self.lbstart:]
-        if len(buf) != 0:
+        if len(self.buf) != 0:
             result.append(''.join(self.buf))
         return result
 
     def tail(self, nlines=10):
-        oneorzero = 1 if len(self.buf) != 0 else 0
-        start = max(self.lbstart, len(self.linebuf) - nlines + oneorzero)
-        return ''.join(self.linebuf[start:]) + ''.join(self.buf)
+        with self.lock:
+            oneorzero = 1 if len(self.buf) != 0 else 0
+            start = max(self.lbstart, len(self.linebuf) - nlines + oneorzero)
+            return ''.join(self.linebuf[start:]) + ''.join(self.buf)
 
     def _complain_notimplemented(self, name):
         raise NotImplementedError('%s not supported for NLinesStringWriter.')
@@ -158,12 +166,17 @@ class NLinesStringWriter(object):
             raise ValueError, 'I/O operation on closed file'
 
 class NLinesStdStringWriter(object):
-    def __init__(self, nlines_out, nlines_err):
+    def __init__(self, nlines_out=10, nlines_err=10):
         self.out_writer = NLinesStringWriter(nlines_out)
         self.err_writer = NLinesStringWriter(nlines_err)
+        self.name = self.__class__.__name__
 
     def stdout(self):
         return self.out_writer
 
     def stderr(self):
         return self.err_writer
+
+    def close(self):
+        self.out_writer.close()
+        self.err_writer.close()
