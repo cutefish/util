@@ -165,6 +165,7 @@ class NLinesStringWriter(object):
         if self.closed:
             raise ValueError, 'I/O operation on closed file'
 
+
 class NLinesStdStringWriter(object):
     def __init__(self, nlines_out=10, nlines_err=10):
         self.out_writer = NLinesStringWriter(nlines_out)

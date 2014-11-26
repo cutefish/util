@@ -68,6 +68,14 @@ class FileUtil(object):
         if not os.path.isdir(path):
             raise IOError('%s is not a directory' % (path))
 
+    @classmethod
+    def dirname(cls, path):
+        return os.path.dirname(path)
+
+    @classmethod
+    def basename(cls, path):
+        return os.path.basename(path)
+
 
 class FileWriter(io.FileIO):
     def __init__(self, filename):

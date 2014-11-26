@@ -178,10 +178,13 @@ class RandVar(object):
                 if r <= prob:
                     if self.numbers is None:
                         self.update(i)
+                        return i
                     else:
                         self.update(self.numbers[i])
-                    return i
+                        return self.numbers[i]
                 r -= prob
+            #should not be here
+            raise ValueError
 
         def _normalize(self, freqs):
             probs = []

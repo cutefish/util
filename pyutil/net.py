@@ -64,6 +64,7 @@ class Node(object):
 
     @classmethod
     def serialize(cls, node, writer, smark='(', emark=')', sep=','):
+        # example: (name, ip)
         if node is None:
             raise ValueError('Node is None.')
         cls.ensure_valid_ser(node, smark + emark + sep)
@@ -72,6 +73,7 @@ class Node(object):
 
     @classmethod
     def deserialize(self, reader, smark='(', emark=')', sep=','):
+        # example: (name, ip)
         ch = reader.read(1)
         if ch != smark:
             raise Node.SMarkError(ch)
@@ -198,8 +200,9 @@ class Topology(object):
     @classmethod
     def serialize(cls, topology, writer, scope=None,
                   smark='{', emark='}', sep='$'):
+        # example: {(root, None)(ch1, None)$(ch2, None)$$}
         if topology is None:
-            raise ValueError('Topology is None.')
+            raise ValueError('topology is None.')
         if scope is None:
             node = topology.root
         else:
@@ -236,6 +239,7 @@ class Topology(object):
     @classmethod
     def deserialize(cls, reader, smark='{', emark='}', sep='$',
                     nsmark='(', nemark=')', nsep=','):
+        # example: {(root, None)(ch1, None)$(ch2, None)$$}
         ch = reader.read(1)
         if ch != smark:
             raise Topology.SMarkError(ch)
