@@ -2,7 +2,7 @@ import logging
 import time
 import unittest
 
-from pyutil.run import Alarm, Pool
+from pyutil.run import Alarm, Pool, OSCmd
 from pyutil.fio import StdFileWriter
 
 logging.basicConfig(level=logging.INFO)
@@ -23,23 +23,23 @@ class TestPool(unittest.TestCase):
     def testRun(self):
         start = time.time()
         with Pool(1) as pool:
-            pool.add('python -c "import time; time.sleep(1)"')
+            pool.add(OSCmd('python -c "import time; time.sleep(1)"'))
             pool.wait()
         end = time.time()
         self.assertAlmostEqual(1, end - start, delta = 0.4)
         start = time.time()
         with Pool(1) as pool:
-            pool.add('python -c "import time; time.sleep(1.5)"')
-            pool.add('python -c "import time; time.sleep(1.5)"')
-            pool.add('python -c "import time; time.sleep(1.5)"')
+            pool.add(OSCmd('python -c "import time; time.sleep(1.5)"'))
+            pool.add(OSCmd('python -c "import time; time.sleep(1.5)"'))
+            pool.add(OSCmd('python -c "import time; time.sleep(1.5)"'))
             pool.wait()
         end = time.time()
         self.assertAlmostEqual(4.5, end - start, delta = 1.0)
         start = time.time()
         with Pool(3) as pool:
-            pool.add('python -c "import time; time.sleep(1.5)"')
-            pool.add('python -c "import time; time.sleep(1.5)"')
-            pool.add('python -c "import time; time.sleep(1.5)"')
+            pool.add(OSCmd('python -c "import time; time.sleep(1.5)"'))
+            pool.add(OSCmd('python -c "import time; time.sleep(1.5)"'))
+            pool.add(OSCmd('python -c "import time; time.sleep(1.5)"'))
             pool.wait()
         end = time.time()
         self.assertAlmostEqual(1.5, end - start, delta = 0.4)
@@ -48,9 +48,9 @@ class TestPool(unittest.TestCase):
         with Pool(10) as pool:
             for i in range(99):
                 if i % 3 == 0:
-                    pool.add('python -c "import sys; sys.exit(3)"')
+                    pool.add(OSCmd('python -c "import sys; sys.exit(3)"'))
                 else:
-                    pool.add('python -c "import sys; sys.exit(0)"')
+                    pool.add(OSCmd('python -c "import sys; sys.exit(0)"'))
             pool.wait()
         self.assertEqual(66, len(pool.getfinished()))
         self.assertEqual(33, len(pool.getfailed()))
@@ -58,23 +58,29 @@ class TestPool(unittest.TestCase):
     def testTimeout(self):
         start = time.time()
         with Pool(1) as pool:
-            pool.add('python -c "import time; time.sleep(100)"', timeout=1)
-            pool.add('python -c "import time; time.sleep(100)"', timeout=3)
+            pool.add(OSCmd('python -c "import time; time.sleep(100)"',
+                           timeout=1))
+            pool.add(OSCmd('python -c "import time; time.sleep(100)"',
+                           timeout=3))
             pool.wait()
         end = time.time()
         self.assertAlmostEqual(4, end - start, delta = 0.5)
         start = time.time()
         with Pool(2) as pool:
-            pool.add('python -c "import time; time.sleep(100)"', timeout=2)
-            pool.add('python -c "import time; time.sleep(100)"', timeout=2)
+            pool.add(OSCmd('python -c "import time; time.sleep(100)"',
+                           timeout=2))
+            pool.add(OSCmd('python -c "import time; time.sleep(100)"',
+                           timeout=2))
             pool.wait()
         end = time.time()
         self.assertAlmostEqual(2, end - start, delta = 0.5)
 
     def testOutput(self):
         with Pool(2) as pool:
-            pool.add('python -c "import sys; sys.stdout.write(\'stdout\')"')
-            pool.add('python -c "import sys; sys.stderr.write(\'stderr\')"')
+            pool.add(OSCmd(
+                'python -c "import sys; sys.stdout.write(\'stdout\')"'))
+            pool.add(OSCmd(
+                'python -c "import sys; sys.stderr.write(\'stderr\')"'))
             pool.wait()
         for cmd, retcode, writer in pool.getfinished():
             self.assertEqual(0, retcode)
@@ -87,12 +93,12 @@ class TestPool(unittest.TestCase):
 
     def testError(self):
         with Pool(2) as pool:
-            pool.add('python -c '
-                     '"import sys; '
-                     'sys.stderr.write(\'Error\'); '
-                     'sys.exit(5)"')
-            pool.add('python -c "import sys; '
-                     'sys.stdout.write(\'Success\')"')
+            pool.add(OSCmd('python -c '
+                           '"import sys; '
+                           'sys.stderr.write(\'Error\'); '
+                           'sys.exit(5)"'))
+            pool.add(OSCmd('python -c "import sys; '
+                           'sys.stdout.write(\'Success\')"'))
             pool.wait()
         cmd, retcode, writer = pool.getfinished()[0]
         self.assertEqual(0, retcode)
@@ -103,11 +109,11 @@ class TestPool(unittest.TestCase):
 
     def testFile(self):
         with Pool(1) as pool:
-            pool.add('python -c "import sys; '
-                     'sys.stdout.write(\'Success\'); '
-                     'sys.stderr.write(\'Error\'); '
-                     'sys.exit(-1)"',
-                     StdFileWriter('/tmp/test'))
+            pool.add(OSCmd('python -c "import sys; '
+                           'sys.stdout.write(\'Success\'); '
+                           'sys.stderr.write(\'Error\'); '
+                           'sys.exit(-1)"',
+                           StdFileWriter('/tmp/test')))
             pool.wait()
         with open('/tmp/test/stdout', 'r') as fh:
             result = fh.read()
