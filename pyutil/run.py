@@ -3,7 +3,6 @@ import multiprocessing
 import shlex
 import subprocess
 import time
-import traceback
 import Queue
 from threading import Thread
 
@@ -189,6 +188,7 @@ class TaskRunner(Thread):
         if self.curr is not None:
             self.curr.kill()
         self.closed = True
+        print 'closed'
 
 
 class OSCmd(Task):
@@ -218,12 +218,13 @@ class OSCmd(Task):
         if self.killed:
             return
         if self.writer is None:
-            self.proc = subprocess.Popen(shlex.split(cmd),
+            self.proc = subprocess.Popen(shlex.split(self.cmd),
                                          stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE)
-            self.writer = StdPipeWriter(proc, NLinesStdStringWriter(100, 50))
+            self.writer = StdPipeWriter(
+                self.proc, NLinesStdStringWriter(100, 50))
         else:
-            self.proc = subprocess.Popen(shlex.split(cmd),
+            self.proc = subprocess.Popen(shlex.split(self.cmd),
                                          stdout=self.writer.stdout(),
                                          stderr=self.writer.stderr())
 
@@ -233,11 +234,12 @@ class OSCmd(Task):
             curr = time.time() - self.start_time
             if curr > self.timeout:
                 self.logger.warn(
-                    'Command [%s] time out (%s sec). Kill.' % (cmd, curr))
+                    'Command [%s] time out (%s sec). Kill.'
+                    % (self.cmd, curr))
                 self.proc.kill()
                 self.proc.wait()
         # check execution
-        retcode = proc.poll()
+        retcode = self.proc.poll()
         if retcode is None:
             return True
         if retcode != 0:
@@ -245,9 +247,9 @@ class OSCmd(Task):
             self.errmsg=(
                 'Command [%s] exit with code %s.\n'
                 '\tSTDOUT:\n%s\n\tSTDERR:\n%s\n'
-                % (cmd, retcode,
-                   ''.join(writer.stdout().tail(50)),
-                   ''.join(writer.stderr().tail(50))))
+                % (self.cmd, retcode,
+                   ''.join(self.writer.stdout().tail(50)),
+                   ''.join(self.writer.stderr().tail(50))))
         else:
             self.success = True
         return False
