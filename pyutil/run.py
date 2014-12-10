@@ -3,8 +3,8 @@ import multiprocessing
 import shlex
 import subprocess
 import time
-import Queue
-from threading import Thread
+from collections import deque
+from threading import Thread, Condition
 
 from pyutil.fio import StdPipeWriter
 from pyutil.string import NLinesStdStringWriter
@@ -49,25 +49,31 @@ class Pool(object):
     methods:
         start(): start the pool.
         add(): add a command to the queue for processing.
+            raise Pool.Full exception if queue is full.
         wait(): wait until all the commands are proccessed.
         fetch_succeeded(): return the list of succeeded commands.
         fetch_failed(): return the list of failed commands.
         qlen(): return number of commands to run.
         close(): close the pool.
     """
+    class Full(Exception):
+        pass
+
     def __init__(self, nthreads=None, qlen=1000000):
         if nthreads is None:
             nthreads = multiprocessing.cpu_count()
-        self.start_time = time.time()
-        self.torun = Queue.Queue(qlen)
-        self.succeeded = Queue.Queue()
-        self.failed = Queue.Queue()
+        self.t_start = time.time()
+        self.torun = deque()
+        self.succeeded = deque()
+        self.failed = deque()
         self.threads = []
+        self.maxqlen = qlen
+        self.new = Condition()
+        self.done = Condition()
         self.closed = False
         self.logger = logging.getLogger(self.__class__.__name__)
         for i in range(nthreads):
-            thread = TaskRunner(self.start_time,
-                                 self.torun, self.succeeded, self.failed)
+            thread = TaskRunner(self)
             thread.daemon = True
             self.threads.append(thread)
 
@@ -83,48 +89,66 @@ class Pool(object):
             thread.start()
 
     def qlen(self):
-        return self.torun.qsize()
+        return len(self.torun)
 
-    def add(self, task, block=True, timeout=None):
+    def add(self, task):
         """Add a task to the queue for processing. """
-        self.torun.put(task, block, timeout)
+        with self.new:
+            if self.qlen() > self.maxqlen:
+                raise Pool.Full
+            self.torun.append(task)
+            self.new.notify()
 
     def wait(self):
-        self.torun.join()
+        """Wait until all the tasks are proccessed."""
+        while True:
+            with self.new:
+                blocking = False
+                if self.qlen() != 0:
+                    blocking = True
+                for thread in self.threads:
+                    if thread.isworking():
+                        blocking = True
+                if not blocking:
+                    break
+                with self.done:
+                    self.done.wait(1)
 
     def fetch_succeeded(self):
+        """Pop out all tasks that have succeeded."""
         result = []
-        try:
-            while True:
-                result.append(self.succeeded.get(False))
-                self.succeeded.task_done()
-        except Queue.Empty:
-            pass
+        with self.done:
+            try:
+                while True:
+                    result.append(self.succeeded.popleft())
+            except IndexError:
+                pass
         return result
 
     def fetch_failed(self):
+        """Pop out all tasks that have failed."""
         result = []
-        try:
-            while True:
-                result.append(self.failed.get(False))
-                self.failed.task_done()
-        except Queue.Empty:
-            pass
+        with self.done:
+            try:
+                while True:
+                    result.append(self.failed.popleft())
+            except IndexError:
+                pass
         return result
 
     def close(self):
         for thread in self.threads:
             thread.close()
 
-
 class Task(object):
     TORUN, RUNNING, FINISHED = range(3)
     def __init__(self):
         self.state = Task.TORUN
-        self.start_time = -1
-        self.end_time = -1
+        self.t_start = -1
+        self.t_end = -1
         self.success = False
         self.errmsg = None
+        self.logger = logging.getLogger(self.__class__.__name__)
 
     def run(self):
         pass
@@ -134,12 +158,9 @@ class Task(object):
 
 
 class TaskRunner(Thread):
-    def __init__(self, start_time, torun, succeeded, failed):
+    def __init__(self, pool):
         super(TaskRunner, self).__init__()
-        self.start_time = start_time
-        self.torun = torun
-        self.succeeded = succeeded
-        self.failed = failed
+        self.pool = pool
         self.curr = None
         self.closed = False
         self.check_interval = 0.1
@@ -148,59 +169,70 @@ class TaskRunner(Thread):
     def run(self):
         while not self.closed:
             try:
-                while (self.curr is None) and (not self.closed):
-                    try:
-                        self.curr = self.torun.get(block=True, timeout=1)
-                    except Queue.Empty:
-                        pass
-                if self.closed:
-                    break
+                with self.pool.new:
+                    if self.pool.qlen() == 0:
+                        self.pool.new.wait(1)
+                        continue
+                    self.curr = self.pool.torun.popleft()
                 if self.curr.state != Task.TORUN:
                     raise ValueError('Task state not Task.TORUN: state=%s'
                                      % (self.curr.state))
-                self.curr.start_time = time.time() - self.start_time
+                self.curr.t_start = time.time() - self.pool.t_start
                 self.curr.state = Task.RUNNING
                 self.logger.info('Task [%s] starts at %s.'
-                                 % (self.curr, self.curr.start_time))
+                                 % (self.curr, self.curr.t_start))
                 self.curr.run()
             except Exception as e:
                 self.logger.exception(e)
             finally:
                 if self.curr is not None:
-                    if self.curr.state == Task.RUNNING:
-                        self.torun.task_done()
-                    self.curr.end_time = time.time() - self.start_time
+                    if self.curr.state != Task.RUNNING:
+                        self.logger.warn(
+                            'Task state not Task.RUNNING: state=%s'
+                            % (self.curr.state))
+                    self.curr.t_end = time.time() - self.pool.t_start
                     self.curr.state = Task.FINISHED
                     if not self.curr.success:
                         self.logger.error(
                             'Task [%s] failed at %s. Error message: %s.'
-                            % (self.curr, self.curr.end_time,
+                            % (self.curr, self.curr.t_end,
                                self.curr.errmsg))
-                        self.failed.put(self.curr)
+                        with self.pool.done:
+                            self.pool.failed.append(self.curr)
+                            self.pool.done.notify()
                     else:
                         self.logger.info(
                             'Task [%s] succeeded at %s.'
-                            % (self.curr, self.curr.end_time))
-                        self.succeeded.put(self.curr)
+                            % (self.curr, self.curr.t_end))
+                        with self.pool.done:
+                            self.pool.succeeded.append(self.curr)
+                            self.pool.done.notify()
                 self.curr = None
 
     def close(self):
         if self.curr is not None:
             self.curr.kill()
         self.closed = True
-        print 'closed'
+
+    def isworking(self):
+        return self.curr is not None
 
 
 class OSCmd(Task):
-    def __init__(self, cmd, out_writer, timeout=None):
-        super(Task, self).__init__()
+    def __init__(self, cmd, out_writer=None, timeout=None):
+        super(OSCmd, self).__init__()
         self.cmd = cmd
         self.writer = out_writer
         self.timeout = timeout
         self.proc = None
         self.check_interval = 0.1
         self.killed = False
+        self.start_time = -1
+        self.retcode = None
         self.logger = logging.getLogger(self.__class__.__name__)
+
+    def __str__(self):
+        return ('%s > %s' % (self.cmd, self.writer))
 
     def run(self):
         try:
@@ -212,7 +244,6 @@ class OSCmd(Task):
                 self.proc.kill()
             if self.writer is not None:
                 self.writer.close()
-
 
     def launch(self):
         if self.killed:
@@ -227,6 +258,7 @@ class OSCmd(Task):
             self.proc = subprocess.Popen(shlex.split(self.cmd),
                                          stdout=self.writer.stdout(),
                                          stderr=self.writer.stderr())
+        self.start_time = time.time()
 
     def wait(self):
         # check timeout
@@ -239,17 +271,21 @@ class OSCmd(Task):
                 self.proc.kill()
                 self.proc.wait()
         # check execution
-        retcode = self.proc.poll()
-        if retcode is None:
+        self.retcode = self.proc.poll()
+        if self.retcode is None:
             return True
-        if retcode != 0:
+        if self.retcode != 0:
             self.success = False
             self.errmsg=(
                 'Command [%s] exit with code %s.\n'
                 '\tSTDOUT:\n%s\n\tSTDERR:\n%s\n'
-                % (self.cmd, retcode,
+                % (self.cmd, self.retcode,
                    ''.join(self.writer.stdout().tail(50)),
                    ''.join(self.writer.stderr().tail(50))))
         else:
             self.success = True
         return False
+
+    def kill(self):
+        if self.proc is not None:
+            self.proc.kill()

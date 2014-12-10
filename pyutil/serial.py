@@ -3,6 +3,7 @@ import inspect
 import imp
 import logging
 import struct
+from collections import namedtuple
 
 from pyutil.fio import FileUtil
 
@@ -42,18 +43,19 @@ class ImportUtil(object):
 class SerializeTool(object):
     # To do: detect cycles.
     def __init__(self):
-        self.clznames = {'class' : {}, 'name' : {}}
+        ClzSymbols = namedtuple('ClzSymbols', ['clz', 'name'])
+        self.clznames = ClzSymbols(clz=dict(), name=dict())
         self.visited = set([])
 
     def clear_visited(self):
         self.visited.clear()
 
     def reset_class(self, names):
-        self.clznames['name'].clear()
-        self.clznames['class'].clear()
+        self.clznames.name.clear()
+        self.clznames.clz.clear()
         for n, c in names.iteritems():
-            self.clznames['name'][n] = c
-            self.clznames['class'][c] = n
+            self.clznames.name[n] = c
+            self.clznames.clz[c] = n
 
     def serialize(self, item, writer):
         if isinstance(item, int):
@@ -119,16 +121,16 @@ class SerializeTool(object):
     def write_object(self, item, writer):
         self.ensure_notvisited(item)
         writer.write('O')
-        clz = item.__class__
-        name = clz.__name__
-        if clz in self.clznames['class']:
-            name = self.clznames['class'][clz]
-        writer.write(struct.pack('i', len(name)))
-        writer.write(name)
-        if not hasattr(clz, 'serialize'):
+        iclass = item.__class__
+        cname = iclass.__name__
+        if iclass in self.clznames.clz:
+            cname = self.clznames.clz[iclass]
+        writer.write(struct.pack('i', len(cname)))
+        writer.write(cname)
+        if not hasattr(iclass, 'serialize'):
             raise RuntimeError('class %s of item %s has no serialize method'
-                               % (clz, item))
-        clz.serialize(item, writer)
+                               % (iclass, item))
+        iclass.serialize(item, writer)
 
     def ensure_notvisited(self, item):
         if id(item) in self.visited:
@@ -198,11 +200,11 @@ class SerializeTool(object):
         return item
 
     def read_object(self, reader):
-        clzname_len = struct.unpack('i', reader.read(4))[0]
-        clzname = reader.read(clzname_len)
-        if clzname in self.clznames['name']:
-            clz = self.clznames['name'][clzname]
+        cname_len = struct.unpack('i', reader.read(4))[0]
+        cname = reader.read(cname_len)
+        if cname in self.clznames.name:
+            iclass = self.clznames.name[cname]
         else:
-            clz = eval(clzname)
-        return clz.deserialize(reader)
+            iclass = eval(cname)
+        return iclass.deserialize(reader)
 

@@ -118,6 +118,9 @@ class StdPipeWriter(object):
         outthread.start()
         errthread.start()
 
+    def __str__(self):
+        return '|'
+
     def stdout(self):
         return self.std_writer.stdout()
 
