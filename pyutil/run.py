@@ -102,17 +102,17 @@ class Pool(object):
     def wait(self):
         """Wait until all the tasks are proccessed."""
         while True:
+            blocking = False
             with self.new:
-                blocking = False
                 if self.qlen() != 0:
                     blocking = True
                 for thread in self.threads:
                     if thread.isworking():
                         blocking = True
-                if not blocking:
-                    break
-                with self.done:
-                    self.done.wait(1)
+            if not blocking:
+                break
+            with self.done:
+                self.done.wait(1.0)
 
     def fetch_succeeded(self):
         """Pop out all tasks that have succeeded."""
@@ -170,9 +170,10 @@ class TaskRunner(Thread):
         while not self.closed:
             try:
                 with self.pool.new:
-                    if self.pool.qlen() == 0:
-                        self.pool.new.wait(1)
-                        continue
+                    while (self.pool.qlen() == 0) and (not self.closed):
+                        self.pool.new.wait(1.0)
+                    if self.closed:
+                        break
                     self.curr = self.pool.torun.popleft()
                 if self.curr.state != Task.TORUN:
                     raise ValueError('Task state not Task.TORUN: state=%s'
@@ -241,9 +242,15 @@ class OSCmd(Task):
                 time.sleep(self.check_interval)
         finally:
             if self.proc is not None:
-                self.proc.kill()
+                try:
+                    self.proc.kill()
+                except:
+                    pass
             if self.writer is not None:
-                self.writer.close()
+                try:
+                    self.writer.close()
+                except:
+                    pass
 
     def launch(self):
         if self.killed:
@@ -288,4 +295,7 @@ class OSCmd(Task):
 
     def kill(self):
         if self.proc is not None:
-            self.proc.kill()
+            try:
+                self.proc.kill()
+            except:
+                pass

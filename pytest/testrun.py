@@ -85,7 +85,7 @@ class TestPool(unittest.TestCase):
         except KeyboardInterrupt:
             pass
         end = time.time()
-        self.assertAlmostEqual(after, end - start, delta = 0.4)
+        self.assertAlmostEqual(after, end - start, delta = 0.5)
         time.sleep(2) # ensure the task runner is done
         failed = pool.fetch_failed()
         self.assertEqual(1, len(failed))
@@ -97,14 +97,14 @@ class TestPool(unittest.TestCase):
                 pool.add(SleepTask(1))
             pool.wait()
         end = time.time()
-        self.assertAlmostEqual(5, end - start, delta = 2.5)
+        self.assertAlmostEqual(5, end - start, delta = 0.5)
         start = time.time()
         with Pool(5) as pool:
             for i in range(5):
                 pool.add(SleepTask(1))
             pool.wait()
         end = time.time()
-        self.assertAlmostEqual(1, end - start, delta = 2.5)
+        self.assertAlmostEqual(1, end - start, delta = 0.5)
 
     def testStress(self):
         with Pool(4) as pool:
