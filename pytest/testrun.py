@@ -105,6 +105,16 @@ class TestPool(unittest.TestCase):
             pool.wait()
         end = time.time()
         self.assertAlmostEqual(1, end - start, delta = 0.5)
+        start = time.time()
+        with Pool(5) as pool:
+            for i in range(5):
+                pool.add(SleepTask(1))
+            time.sleep(1.5)
+            for i in range(5):
+                pool.add(SleepTask(1))
+            pool.wait()
+        end = time.time()
+        self.assertAlmostEqual(2.5, end - start, delta = 0.5)
 
     def testStress(self):
         with Pool(4) as pool:
