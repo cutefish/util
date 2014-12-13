@@ -1,5 +1,4 @@
 import logging
-import multiprocessing
 import shlex
 import subprocess
 import time
@@ -60,8 +59,7 @@ class Pool(object):
         pass
 
     def __init__(self, nthreads=None, qlen=1000000):
-        if nthreads is None:
-            nthreads = multiprocessing.cpu_count()
+        self.nthreads = nthreads
         self.t_start = time.time()
         self.torun = deque()
         self.succeeded = deque()
@@ -72,10 +70,11 @@ class Pool(object):
         self.done = Condition()
         self.closed = False
         self.logger = logging.getLogger(self.__class__.__name__)
-        for i in range(nthreads):
-            thread = TaskRunner(self)
-            thread.daemon = True
-            self.threads.append(thread)
+        if self.nthreads is not None:
+            for i in range(self.nthreads):
+                thread = TaskRunner(self)
+                thread.daemon = True
+                self.threads.append(thread)
 
     def __enter__(self):
         self.start()
@@ -98,21 +97,40 @@ class Pool(object):
                 raise Pool.Full
             self.torun.append(task)
             self.new.notify()
+            nbusy = self.nthreads_working()
+        # if all threads are busy and we can launch new thread
+        if ((nbusy == len(self.threads)) and (self.nthreads is None)):
+            thread = TaskRunner(self)
+            thread.daemon = True
+            self.threads.append(thread)
+            thread.start()
 
-    def wait(self):
-        """Wait until all the tasks are proccessed."""
+    def wait(self, timeout=None):
+        """Wait until all the tasks are proccessed or timeout."""
+        ts = time.time()
         while True:
             blocking = False
             with self.new:
                 if self.qlen() != 0:
                     blocking = True
-                for thread in self.threads:
-                    if thread.isworking():
-                        blocking = True
+                if self.nthreads_working() != 0:
+                    blocking = True
             if not blocking:
                 break
-            with self.done:
-                self.done.wait(1.0)
+            if timeout is not None:
+                curr = time.time()
+                if curr - ts >= timeout:
+                    break
+                else:
+                    with self.done:
+                        self.done.wait(ts + timeout - curr)
+            else:
+                with self.done:
+                    self.done.wait(1.0)
+
+    def wait_taskdone(self, timeout=None):
+        with self.done:
+            self.done.wait(timeout)
 
     def fetch_succeeded(self):
         """Pop out all tasks that have succeeded."""
@@ -135,6 +153,13 @@ class Pool(object):
             except IndexError:
                 pass
         return result
+
+    def nthreads_working(self):
+        count = 0
+        for thread in self.threads:
+            if thread.isworking():
+                count += 1
+        return count
 
     def close(self):
         for thread in self.threads:

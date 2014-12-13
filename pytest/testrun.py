@@ -115,6 +115,34 @@ class TestPool(unittest.TestCase):
             pool.wait()
         end = time.time()
         self.assertAlmostEqual(2.5, end - start, delta = 0.5)
+        start = time.time()
+        with Pool() as pool:
+            for i in range(20):
+                pool.add(SleepTask(1))
+            pool.wait()
+        end = time.time()
+        self.assertAlmostEqual(1.0, end - start, delta = 0.5)
+
+    def testWait(self):
+        start = time.time()
+        with Pool(2) as pool:
+            pool.add(SleepTask(4))
+            pool.wait(2.0)
+            pool.add(SleepTask(3))
+            pool.wait(10.0)
+        end = time.time()
+        self.assertAlmostEqual(5.0, end - start, delta = 0.5)
+        start = time.time()
+        with Pool(2) as pool:
+            pool.add(SleepTask(2))
+            pool.add(SleepTask(3))
+            pool.wait_taskdone()
+            pool.add(SleepTask(3))
+            pool.wait_taskdone()
+            pool.add(SleepTask(2))
+            pool.wait()
+        end = time.time()
+        self.assertAlmostEqual(5.0, end - start, delta = 0.5)
 
     def testStress(self):
         with Pool(4) as pool:
@@ -217,8 +245,8 @@ class TestOSCmd(unittest.TestCase):
 
 if __name__ == '__main__':
     suite = unittest.TestSuite([
-        unittest.TestLoader().loadTestsFromTestCase(TestAlarm),
+        #unittest.TestLoader().loadTestsFromTestCase(TestAlarm),
         unittest.TestLoader().loadTestsFromTestCase(TestPool),
-        unittest.TestLoader().loadTestsFromTestCase(TestOSCmd),
+        #unittest.TestLoader().loadTestsFromTestCase(TestOSCmd),
     ])
     unittest.TextTestRunner().run(suite)
